@@ -1,0 +1,133 @@
+#!/bin/bash
+
+# =====================================================
+# React Deployment Script for Amazon Linux 2023
+# Deploys a React application using Nginx
+# =====================================================
+
+set -e
+
+# ================= Configuration =====================
+REPO_URL="https://github.com/USERNAME/REPOSITORY.git"
+PROJECT_NAME="REPOSITORY"
+BRANCH="main"
+
+# Optional
+# VITE_API_URL="http://YOUR_BACKEND_IP/api"
+# =====================================================
+
+echo "========== Updating System =========="
+sudo dnf update -y
+
+echo "========== Installing Git =========="
+sudo dnf install -y git
+
+echo "========== Installing Node.js 22 =========="
+curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
+sudo dnf install -y nodejs
+
+echo "Node Version : $(node -v)"
+echo "NPM Version  : $(npm -v)"
+
+echo "========== Installing Nginx =========="
+sudo dnf install -y nginx
+
+sudo systemctl enable nginx
+sudo systemctl start nginx
+
+echo "========== Cloning Repository =========="
+
+cd /home/ec2-user
+
+if [ -d "$PROJECT_NAME" ]; then
+    echo "Repository already exists."
+    cd "$PROJECT_NAME"
+
+    git fetch origin
+    git checkout "$BRANCH"
+    git pull origin "$BRANCH"
+else
+    git clone -b "$BRANCH" "$REPO_URL"
+    cd "$PROJECT_NAME"
+fi
+
+# =====================================================
+# Optional Environment File
+# =====================================================
+
+# cat > .env <<EOF
+# VITE_API_URL=$VITE_API_URL
+# EOF
+
+echo "========== Installing Dependencies =========="
+
+if [ -f package-lock.json ]; then
+    npm ci
+else
+    npm install
+fi
+
+echo "========== Building React Application =========="
+
+npm run build
+
+if [ ! -d "dist" ]; then
+    echo "ERROR: Build failed. 'dist' folder not found."
+    exit 1
+fi
+
+echo "========== Deploying to Nginx =========="
+
+sudo rm -rf /usr/share/nginx/html/*
+sudo cp -r dist/* /usr/share/nginx/html/
+
+sudo chown -R nginx:nginx /usr/share/nginx/html
+sudo chmod -R 755 /usr/share/nginx/html
+
+echo "========== Configuring Nginx =========="
+
+sudo tee /etc/nginx/conf.d/react.conf > /dev/null <<EOF
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+EOF
+
+sudo rm -f /etc/nginx/conf.d/default.conf
+
+echo "========== Testing Nginx =========="
+sudo nginx -t
+
+echo "========== Restarting Nginx =========="
+sudo systemctl restart nginx
+
+PRIVATE_IP=$(hostname -I | awk '{print $1}')
+
+echo ""
+echo "=================================================="
+echo "           React Deployment Successful"
+echo "=================================================="
+echo "Project      : $PROJECT_NAME"
+echo "Branch       : $BRANCH"
+echo "Node Version : $(node -v)"
+echo "NPM Version  : $(npm -v)"
+echo "Nginx Status : $(systemctl is-active nginx)"
+echo "Private IP   : $PRIVATE_IP"
+echo ""
+echo "Application URL (within VPC):"
+echo "http://$PRIVATE_IP"
+echo ""
+echo "This EC2 instance is PRIVATE."
+echo "Access the application using:"
+echo "  - Bastion Host"
+echo "  - Another EC2 in the same VPC"
+echo "  - VPN"
+echo "  - Application Load Balancer (ALB)"
+echo "=================================================="
